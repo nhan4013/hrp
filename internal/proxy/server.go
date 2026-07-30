@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nhan4013/hrp/internal/cassette"
+	"github.com/nhan4013/hrp/internal/fault"
 	"github.com/nhan4013/hrp/internal/matcher"
 	"github.com/nhan4013/hrp/internal/redact"
 )
@@ -51,6 +52,11 @@ type Config struct {
 	Store *cassette.Store
 	// Matcher is required for ModeReplay and ModeAuto.
 	Matcher *matcher.Matcher
+	// Redactor defaults to redact.Default(), which covers the sensitive headers
+	// and nothing else. Body redaction has to be configured.
+	Redactor *redact.Redactor
+	// Fault injects failures when non-nil and active.
+	Fault *fault.Injector
 }
 
 // Server is an HTTP proxy that records or replays interactions with an upstream.
@@ -65,6 +71,9 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.Mode == "" {
 		cfg.Mode = ModePassthrough
+	}
+	if cfg.Redactor == nil {
+		cfg.Redactor = redact.Default()
 	}
 
 	s := &Server{mode: cfg.Mode, store: cfg.Store}
@@ -81,7 +90,7 @@ func New(cfg Config) (*Server, error) {
 		handler = &replayer{
 			store:    cfg.Store,
 			matcher:  cfg.Matcher,
-			redactor: redact.New(),
+			redactor: cfg.Redactor,
 		}
 
 	case ModeAuto:
@@ -96,11 +105,11 @@ func New(cfg Config) (*Server, error) {
 			return nil, err
 		}
 		s.upstream = target
-		rec := &recorder{store: cfg.Store, redactor: redact.New()}
+		rec := &recorder{store: cfg.Store, redactor: cfg.Redactor}
 		handler = &replayer{
 			store:    cfg.Store,
 			matcher:  cfg.Matcher,
-			redactor: redact.New(),
+			redactor: cfg.Redactor,
 			fallback: s.reverseProxy(target, rec),
 		}
 
@@ -116,13 +125,17 @@ func New(cfg Config) (*Server, error) {
 			if cfg.Store == nil {
 				return nil, errors.New("record mode needs a cassette")
 			}
-			rec = &recorder{store: cfg.Store, redactor: redact.New()}
+			rec = &recorder{store: cfg.Store, redactor: cfg.Redactor}
 		}
 		handler = s.reverseProxy(target, rec)
 
 	default:
 		return nil, fmt.Errorf("unknown mode %q, want one of %s, %s, %s, %s",
 			cfg.Mode, ModePassthrough, ModeRecord, ModeReplay, ModeAuto)
+	}
+
+	if cfg.Fault != nil && cfg.Fault.Active() {
+		handler = cfg.Fault.Middleware(handler)
 	}
 
 	s.http = &http.Server{

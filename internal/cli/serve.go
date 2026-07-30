@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nhan4013/hrp/internal/cassette"
-	"github.com/nhan4013/hrp/internal/matcher"
+	"github.com/nhan4013/hrp/internal/config"
 	"github.com/nhan4013/hrp/internal/proxy"
 )
 
@@ -25,6 +25,7 @@ type serveFlags struct {
 	upstream     string
 	cassettePath string
 	name         string
+	configPath   string
 	ignoreQuery  []string
 }
 
@@ -38,20 +39,18 @@ func serveCommand(mode proxy.Mode, use, short, long, example string) *cobra.Comm
 		Example: example,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return serve(cmd.Context(), mode, f)
+			return serve(cmd, mode, f)
 		},
 	}
 
 	cmd.Flags().StringVarP(&f.listen, "listen", "l", ":8080", "address to listen on")
+	cmd.Flags().StringVar(&f.configPath, "config", "", "hrp.yaml to read settings from")
 	if mode != proxy.ModeReplay {
 		cmd.Flags().StringVarP(&f.upstream, "upstream", "u", "",
 			"upstream base URL, e.g. https://sandbox.vendor.com")
-		// MarkFlagRequired only fails for a flag that was never defined.
-		_ = cmd.MarkFlagRequired("upstream")
 	}
 	if mode != proxy.ModePassthrough {
 		cmd.Flags().StringVarP(&f.cassettePath, "cassette", "c", "", "cassette file")
-		_ = cmd.MarkFlagRequired("cassette")
 		cmd.Flags().StringVar(&f.name, "name", "",
 			"cassette name (default: cassette file base name)")
 	}
@@ -93,44 +92,77 @@ func proxyCmd() *cobra.Command {
 		"  hrp proxy -u https://sandbox.vendor.com")
 }
 
-func serve(ctx context.Context, mode proxy.Mode, f serveFlags) error {
-	cfg := proxy.Config{Listen: f.listen, Upstream: f.upstream, Mode: mode}
+func serve(cmd *cobra.Command, mode proxy.Mode, f serveFlags) error {
+	var conf *config.Config
+	if f.configPath != "" {
+		var err error
+		if conf, err = config.Load(f.configPath); err != nil {
+			return err
+		}
+	}
 
-	if f.cassettePath != "" {
+	// An explicit flag beats the config file; the config file beats the default.
+	listen := f.listen
+	if conf != nil && conf.Listen != "" && !cmd.Flags().Changed("listen") {
+		listen = conf.Listen
+	}
+	upstream := f.upstream
+	if upstream == "" && conf != nil {
+		upstream = conf.Upstream
+	}
+	cassettePath := f.cassettePath
+	if cassettePath == "" && conf != nil {
+		cassettePath = conf.Cassette
+	}
+
+	if mode != proxy.ModeReplay && upstream == "" {
+		return fmt.Errorf("%s needs an upstream: pass --upstream or set it in a --config file", mode)
+	}
+	if mode != proxy.ModePassthrough && cassettePath == "" {
+		return fmt.Errorf("%s needs a cassette: pass --cassette or set it in a --config file", mode)
+	}
+
+	cfg := proxy.Config{Listen: listen, Upstream: upstream, Mode: mode}
+
+	redactor, err := buildRedactor(conf)
+	if err != nil {
+		return err
+	}
+	cfg.Redactor = redactor
+
+	if cfg.Fault, err = buildFault(conf); err != nil {
+		return err
+	}
+	if cfg.Fault != nil && cfg.Fault.Active() {
+		slog.Warn("fault injection is on", "latency", conf.Fault.Latency,
+			"error_rate", conf.Fault.ErrorRate, "hang_rate", conf.Fault.HangRate)
+	}
+
+	if cassettePath != "" {
 		// Replaying against a cassette that is not there would answer every
 		// request with "nothing recorded", which reads like a matching bug rather
 		// than a wrong path. Fail loudly instead.
 		if mode == proxy.ModeReplay {
-			if _, err := os.Stat(f.cassettePath); err != nil {
+			if _, err := os.Stat(cassettePath); err != nil {
 				return fmt.Errorf("cassette to replay: %w", err)
 			}
 		}
 		name := f.name
 		if name == "" {
-			name = strings.TrimSuffix(filepath.Base(f.cassettePath),
-				filepath.Ext(f.cassettePath))
+			name = strings.TrimSuffix(filepath.Base(cassettePath),
+				filepath.Ext(cassettePath))
 		}
-		store, err := cassette.Load(f.cassettePath, name, f.upstream)
-		if err != nil {
+		if cfg.Store, err = cassette.Load(cassettePath, name, upstream); err != nil {
 			return err
 		}
-		cfg.Store = store
+		slog.Info("cassette", "path", cassettePath, "interactions", cfg.Store.Len())
 	}
 
 	if mode == proxy.ModeReplay || mode == proxy.ModeAuto {
-		var opts []matcher.Option
-		if len(f.ignoreQuery) > 0 {
-			opts = append(opts, matcher.IgnoreQuery(f.ignoreQuery...))
-		}
-		m, err := matcher.New(matcher.DefaultRules, opts...)
-		if err != nil {
+		if cfg.Matcher, err = buildMatcher(conf, f.ignoreQuery); err != nil {
 			return err
 		}
-		cfg.Matcher = m
-		slog.Info("matching", "on", m.Rules(), "ignore_query", f.ignoreQuery)
-	}
-	if cfg.Store != nil {
-		slog.Info("cassette", "path", f.cassettePath, "interactions", cfg.Store.Len())
+		slog.Info("matching", "on", cfg.Matcher.Rules())
 	}
 
 	srv, err := proxy.New(cfg)
@@ -138,6 +170,7 @@ func serve(ctx context.Context, mode proxy.Mode, f serveFlags) error {
 		return err
 	}
 
+	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}

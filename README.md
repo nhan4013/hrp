@@ -30,14 +30,17 @@ Work in progress — this is a learning project, built in the open.
 - [x] Matching engine with a diff that names the field that differs
 - [x] `auto` mode: replay what is known, record what is not
 - [x] `hrp inspect`: list a cassette's interactions
-- [ ] Body redaction (JSON field paths, regex) and `hrp scan`
-- [ ] Fault injection: latency, error rate, forced timeout
+- [x] Body redaction (JSON field paths, regex) and `hrp scan`
+- [x] Fault injection: latency, error rate, forced timeout
+- [x] Config file, `hrp.yaml`
+- [ ] Golden-file tests and CI
+- [ ] Release binaries and a Docker image
 - [ ] MITM forward proxy, so `HTTPS_PROXY=localhost:8080` is all you need
 
-> **Cassettes are not yet safe to commit to git.** Only headers are redacted so
-> far. A secret inside a request or response body — a card number, a token
-> echoed back by the vendor — is still written to disk verbatim. Body redaction
-> and a `hrp scan` pre-commit check are the next milestone.
+> **Check a cassette before you commit it.** Sensitive headers are redacted with
+> no configuration, but which body field holds a card number is specific to your
+> API, so body redaction has to be declared in `hrp.yaml`. Run `hrp scan` — it
+> exits non-zero when it finds something, so it works as a pre-commit hook.
 
 ## Try it
 
@@ -150,13 +153,93 @@ not of its stored form, so a base64 body does not look a third larger than it is
 | `hrp auto -u URL -c FILE` | Replay what is recorded, record what is not |
 | `hrp proxy -u URL` | Forward upstream, record nothing |
 | `hrp inspect FILE` | List a cassette's interactions as a table |
+| `hrp scan FILE...` | Look for secrets a cassette should not carry; exits non-zero if found |
 
 Shared flags: `-l/--listen` (default `:8080`), `-u/--upstream`, `-c/--cassette`,
-`--name`. `replay` and `auto` also take `--ignore-query` for the timestamps and
-nonces that change on every call.
+`--name`, `--config`. `replay` and `auto` also take `--ignore-query` for the
+timestamps and nonces that change on every call. An explicit flag beats the
+config file, which beats the default.
 
 Matching is on method, path, query and body. Headers take no part: they differ
 per HTTP client, and the ones carrying secrets are redacted on both sides anyway.
+
+## Keeping secrets out of the cassette
+
+Redaction runs on the write path only. A cassette gets committed, and one leaked
+token stays leaked for the whole of that repository's history.
+
+Sensitive headers — `authorization`, `cookie`, `set-cookie`, `x-api-key` and
+friends — are redacted with no configuration at all. Bodies need rules, because
+which field holds a card number is specific to your API:
+
+```yaml
+redact:
+  headers: [x-vendor-signature]
+  json_fields: [card.number, cvv, id_number]   # structural, reaches numbers too
+  patterns:                                    # textual, reaches into strings
+    - name: card_number
+      regex: '\b\d{13,19}\b'
+```
+
+`json_fields` walks the decoded document, so it can redact a secret stored as a
+JSON *number*, and it traverses arrays element-wise. `patterns` apply to header
+values and to JSON string values — never to bare numbers, because rewriting one
+would turn `"amount":4111111111111111` into invalid JSON.
+
+**Known limitation:** JSON encoded inside a JSON string is not walked
+structurally, so `json_fields` cannot reach into a payload a vendor echoes back as
+a string. `patterns` do reach inside those strings, which is what makes them the
+tool for embedded payloads.
+
+Body hashes are computed *after* redaction. A SHA-256 of a 16-digit card number
+would be brute-forceable, so the hash has to be of the redacted bytes.
+
+### `hrp scan` is the safety net
+
+Redaction is configured; scanning is not. That asymmetry is deliberate — the last
+line of defence has to work with no config at all.
+
+```
+$ hrp scan ./cassettes/payment.yaml
+FOUND ./cassettes/payment.yaml — 1 suspected secret(s)
+
+  INTERACTION   LOCATION                          DETECTOR  EXCERPT
+  4965e53f3991  request.headers.x-vendor-session  jwt       eyJhbG****VP
+```
+
+Excerpts are masked: a report gets pasted into issues and CI logs, so it must not
+become a second copy of the secret. Exit status is non-zero when anything is
+found.
+
+Built-in detectors are high precision — Stripe, GitHub, AWS, Google and Slack key
+shapes, JWTs, private-key headers, bearer tokens, and card numbers confirmed by a
+Luhn checksum. A scanner that cries wolf gets switched off, so shapes that cannot
+be told apart from ordinary data (a 12-digit national ID, a phone number) are
+*not* built in. Declare those in `hrp.yaml`; `hrp scan --config hrp.yaml` adds
+every `redact.patterns` entry as an extra detector.
+
+## Fault injection
+
+Exercise retry and circuit-breaker paths without asking a vendor to break.
+
+```yaml
+fault:
+  enabled: true
+  latency: 200ms       # added to every request
+  error_rate: 0.5      # probability of answering error_status instead
+  error_status: 503
+  hang_rate: 0         # probability of never answering, to hit client timeouts
+  seed: 42             # fixes the sequence
+```
+
+The seed matters: a test that fails on the third retry has to fail on the third
+retry again. With a fixed seed the same run produces the same sequence of
+failures, verified across process restarts. Injected responses carry
+`X-Hrp-Fault: error`, so a confusing 503 can be traced back to configuration.
+
+See [hrp.yaml](hrp.yaml) for the whole schema. Unknown keys are rejected — a
+misspelled redact rule that silently does nothing is exactly what that file
+exists to prevent.
 
 ## Development
 
