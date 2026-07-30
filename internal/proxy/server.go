@@ -33,6 +33,9 @@ const (
 	ModeRecord Mode = "record"
 	// ModeReplay serves from the cassette and never touches the network.
 	ModeReplay Mode = "replay"
+	// ModeAuto serves from the cassette when it can, and otherwise forwards
+	// upstream and records the result. This is the day-to-day development mode.
+	ModeAuto Mode = "auto"
 )
 
 // Config describes one proxy instance.
@@ -44,9 +47,9 @@ type Config struct {
 	Upstream string
 	// Mode defaults to ModePassthrough.
 	Mode Mode
-	// Store is required for ModeRecord and ModeReplay.
+	// Store is required for every mode except ModePassthrough.
 	Store *cassette.Store
-	// Matcher is required for ModeReplay.
+	// Matcher is required for ModeReplay and ModeAuto.
 	Matcher *matcher.Matcher
 }
 
@@ -81,6 +84,26 @@ func New(cfg Config) (*Server, error) {
 			redactor: redact.New(),
 		}
 
+	case ModeAuto:
+		if cfg.Store == nil {
+			return nil, errors.New("auto mode needs a cassette")
+		}
+		if cfg.Matcher == nil {
+			return nil, errors.New("auto mode needs a matcher")
+		}
+		target, err := parseUpstream(cfg.Upstream)
+		if err != nil {
+			return nil, err
+		}
+		s.upstream = target
+		rec := &recorder{store: cfg.Store, redactor: redact.New()}
+		handler = &replayer{
+			store:    cfg.Store,
+			matcher:  cfg.Matcher,
+			redactor: redact.New(),
+			fallback: s.reverseProxy(target, rec),
+		}
+
 	case ModeRecord, ModePassthrough:
 		target, err := parseUpstream(cfg.Upstream)
 		if err != nil {
@@ -98,8 +121,8 @@ func New(cfg Config) (*Server, error) {
 		handler = s.reverseProxy(target, rec)
 
 	default:
-		return nil, fmt.Errorf("unknown mode %q, want %s, %s or %s",
-			cfg.Mode, ModePassthrough, ModeRecord, ModeReplay)
+		return nil, fmt.Errorf("unknown mode %q, want one of %s, %s, %s, %s",
+			cfg.Mode, ModePassthrough, ModeRecord, ModeReplay, ModeAuto)
 	}
 
 	s.http = &http.Server{
@@ -167,7 +190,7 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}()
 
-	if s.mode == ModeRecord {
+	if s.records() {
 		go s.flushLoop(ctx)
 	}
 
@@ -187,7 +210,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// short-circuit the other.
 	shutdownErr := s.http.Shutdown(shutdownCtx)
 	var flushErr error
-	if s.mode == ModeRecord {
+	if s.records() {
 		if flushErr = s.store.Flush(); flushErr == nil {
 			slog.Info("cassette flushed", "interactions", s.store.Len())
 		}
@@ -196,6 +219,12 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("shutdown: %w", err)
 	}
 	return nil
+}
+
+// records reports whether this mode appends to the cassette, and therefore
+// whether the cassette needs flushing at all.
+func (s *Server) records() bool {
+	return s.mode == ModeRecord || s.mode == ModeAuto
 }
 
 // flushLoop persists the cassette periodically, so a kill -9 loses at most one
