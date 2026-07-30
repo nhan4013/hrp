@@ -23,7 +23,7 @@ func TestNewRejectsBadUpstream(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(":8080", tt.upstream, nil); err == nil {
+			if _, err := New(Config{Listen: ":8080", Upstream: tt.upstream}); err == nil {
 				t.Errorf("New(%q) = nil error, want error", tt.upstream)
 			}
 		})
@@ -32,7 +32,7 @@ func TestNewRejectsBadUpstream(t *testing.T) {
 
 func TestNewAcceptsValidUpstream(t *testing.T) {
 	for _, upstream := range []string{"http://vendor.com", "https://vendor.com/v1"} {
-		if _, err := New(":8080", upstream, nil); err != nil {
+		if _, err := New(Config{Listen: ":8080", Upstream: upstream}); err != nil {
 			t.Errorf("New(%q) = %v, want nil", upstream, err)
 		}
 	}
@@ -59,7 +59,7 @@ func TestForwardsRequestAndResponse(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	s, err := New(":0", upstream.URL, nil)
+	s, err := New(Config{Listen: ":0", Upstream: upstream.URL})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestUnreachableUpstreamReturns502(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close() // nothing is listening on deadURL any more
 
-	s, err := New(":0", deadURL, nil)
+	s, err := New(Config{Listen: ":0", Upstream: deadURL})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestUnreachableUpstreamReturns502(t *testing.T) {
 // Cancelling the context must make Run return cleanly — later phases flush the
 // cassette right after this returns, so a hang or an error here loses data.
 func TestRunShutsDownOnContextCancel(t *testing.T) {
-	s, err := New("127.0.0.1:0", "http://vendor.invalid", nil)
+	s, err := New(Config{Listen: "127.0.0.1:0", Upstream: "http://vendor.invalid"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestRunReportsBindFailure(t *testing.T) {
 	busy := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer busy.Close()
 
-	s, err := New(busy.Listener.Addr().String(), "http://vendor.invalid", nil)
+	s, err := New(Config{Listen: busy.Listener.Addr().String(), Upstream: "http://vendor.invalid"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

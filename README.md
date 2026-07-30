@@ -26,8 +26,10 @@ Work in progress — this is a learning project, built in the open.
 - [x] Reverse proxy: graceful shutdown, structured logging, 502 on upstream failure
 - [x] Record: request/response pairs into a human-readable YAML cassette
 - [x] Header redaction, default-deny, no configuration required
-- [ ] Replay + matching engine, with a readable diff explaining every miss
+- [x] Replay: serves from the cassette, never touches the network
+- [x] Matching engine with a diff that names the field that differs
 - [ ] `auto` mode: replay what is known, record what is not
+- [ ] `hrp inspect`: list a cassette's interactions
 - [ ] Body redaction (JSON field paths, regex) and `hrp scan`
 - [ ] Fault injection: latency, error rate, forced timeout
 - [ ] MITM forward proxy, so `HTTPS_PROXY=localhost:8080` is all you need
@@ -81,14 +83,52 @@ The same logical call recorded from a Python service matches the same call made
 from Go or Node: client-specific and hop-by-hop headers are dropped, so the
 cassette is portable rather than tied to whichever HTTP library recorded it.
 
+### Replay it
+
+Now unplug the network. No `-upstream` needed — replay never leaves the machine.
+
+```sh
+./bin/hrp -listen :8080 -mode replay -cassette ./cassettes/payment.yaml
+```
+
+A hit is served straight from the cassette, tagged `X-Hrp-Replay: hit`. JSON key
+order does not matter: a client that serializes its map differently is still
+making the same call.
+
+A miss returns **599** — a status no real API uses, so it can never be confused
+with a genuine vendor error — and a body that tells you exactly what went wrong
+instead of just "no match found":
+
+```
+No recorded interaction matches POST /v1/charges
+
+  Closest candidate: 0a3419e68eab (POST /v1/charges), score 0.90
+  Differs on: body
+
+  [body]
+    - recorded: {"amount": 1500000, "currency": "VND"}
+    + incoming: {"amount": 2000000, "currency": "VND"}
+      amount: recorded 1500000, incoming 2000000
+```
+
+Candidates are ranked, with method and path weighted highest, so the diff you
+are shown is against the interaction you probably meant.
+
+Replay never rewrites the cassette. Hit counts stay in memory, so a passing test
+suite leaves a clean working tree.
+
 ### Flags
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-listen` | `:8080` | Address to listen on |
-| `-upstream` | — | Upstream base URL (required) |
-| `-cassette` | — | Record to this file; omit for plain pass-through |
+| `-upstream` | — | Upstream base URL; required except in replay mode |
+| `-cassette` | — | Cassette to record into or replay from |
+| `-mode` | `record` if `-cassette` is set, else plain forwarding | `record` or `replay` |
 | `-name` | file base name | Cassette name |
+
+Matching is on method, path, query and body. Headers take no part: they differ
+per HTTP client, and the ones carrying secrets are redacted on both sides anyway.
 
 ## Development
 
