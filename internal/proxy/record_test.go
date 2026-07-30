@@ -27,7 +27,7 @@ func recordFixture(t *testing.T, upstreamHandler http.HandlerFunc) (front *httpt
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	s, err := New(":0", upstream.URL, store)
+	s, err := New(Config{Listen: ":0", Upstream: upstream.URL, Mode: ModeRecord, Store: store})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestNilStoreRecordsNothing(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(echoHandler))
 	defer upstream.Close()
 
-	s, err := New(":0", upstream.URL, nil)
+	s, err := New(Config{Listen: ":0", Upstream: upstream.URL})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

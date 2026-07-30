@@ -86,8 +86,28 @@ func (s *Store) Len() int {
 	return len(s.cassette.Interactions)
 }
 
+// MarkHit counts a replay of the given interaction.
+//
+// This deliberately does not mark the store dirty. Hit counts are useful within
+// a run, but persisting them would rewrite the cassette on every replay-only
+// run and turn a passing test suite into a dirty working tree.
+func (s *Store) MarkHit(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.cassette.Interactions {
+		if s.cassette.Interactions[i].ID == id {
+			s.cassette.Interactions[i].Meta.HitCount++
+			return
+		}
+	}
+}
+
 // Interactions returns the recorded interactions. The slice is a copy, so
 // callers can iterate it without holding the lock.
+//
+// ponytail: this copies the slice header and struct values on every replay
+// lookup. Fine for the hundreds of interactions a cassette normally holds; if
+// cassettes grow to tens of thousands, index by method+path instead.
 func (s *Store) Interactions() []Interaction {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
