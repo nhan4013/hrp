@@ -28,8 +28,8 @@ Work in progress — this is a learning project, built in the open.
 - [x] Header redaction, default-deny, no configuration required
 - [x] Replay: serves from the cassette, never touches the network
 - [x] Matching engine with a diff that names the field that differs
-- [ ] `auto` mode: replay what is known, record what is not
-- [ ] `hrp inspect`: list a cassette's interactions
+- [x] `auto` mode: replay what is known, record what is not
+- [x] `hrp inspect`: list a cassette's interactions
 - [ ] Body redaction (JSON field paths, regex) and `hrp scan`
 - [ ] Fault injection: latency, error rate, forced timeout
 - [ ] MITM forward proxy, so `HTTPS_PROXY=localhost:8080` is all you need
@@ -45,8 +45,7 @@ Work in progress — this is a learning project, built in the open.
 make build
 
 # forward traffic and record it
-./bin/hrp -listen :8080 -upstream https://sandbox.payment-vendor.com \
-          -cassette ./cassettes/payment.yaml
+./bin/hrp record -u https://sandbox.payment-vendor.com -c ./cassettes/payment.yaml
 
 # point your app at the proxy instead of the vendor
 curl -X POST localhost:8080/v1/charges \
@@ -85,10 +84,10 @@ cassette is portable rather than tied to whichever HTTP library recorded it.
 
 ### Replay it
 
-Now unplug the network. No `-upstream` needed — replay never leaves the machine.
+Now unplug the network. No upstream needed — replay never leaves the machine.
 
 ```sh
-./bin/hrp -listen :8080 -mode replay -cassette ./cassettes/payment.yaml
+./bin/hrp replay -c ./cassettes/payment.yaml
 ```
 
 A hit is served straight from the cassette, tagged `X-Hrp-Replay: hit`. JSON key
@@ -117,15 +116,44 @@ are shown is against the interaction you probably meant.
 Replay never rewrites the cassette. Hit counts stay in memory, so a passing test
 suite leaves a clean working tree.
 
-### Flags
+### Leave it on `auto` while you work
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `-listen` | `:8080` | Address to listen on |
-| `-upstream` | — | Upstream base URL; required except in replay mode |
-| `-cassette` | — | Cassette to record into or replay from |
-| `-mode` | `record` if `-cassette` is set, else plain forwarding | `record` or `replay` |
-| `-name` | file base name | Cassette name |
+`auto` replays what it has and records what it does not, so the cassette fills in
+as you go. New calls reach the vendor once; every repeat is served locally.
+
+```sh
+./bin/hrp auto -u https://sandbox.payment-vendor.com -c ./cassettes/payment.yaml
+```
+
+### Look inside a cassette
+
+```
+$ hrp inspect ./cassettes/payment.yaml
+./cassettes/payment.yaml
+3 interaction(s)
+
+ID            METHOD  PATH         QUERY         STATUS  REQ  RESP  MS   HITS
+8fa13f7c4e58  GET     /v1/ready    -             201     -    53B   1    0
+3992f97c9faf  POST    /v1/charges  currency=VND  201     18B  75B   41   2
+12609b2f15d0  POST    /v1/charges  -             201     18B  75B   40   0
+```
+
+`--sort path` or `--sort status` to reorder. Sizes are of the original payload,
+not of its stored form, so a base64 body does not look a third larger than it is.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `hrp record -u URL -c FILE` | Forward upstream and record every interaction |
+| `hrp replay -c FILE` | Serve from the cassette; never touch the network |
+| `hrp auto -u URL -c FILE` | Replay what is recorded, record what is not |
+| `hrp proxy -u URL` | Forward upstream, record nothing |
+| `hrp inspect FILE` | List a cassette's interactions as a table |
+
+Shared flags: `-l/--listen` (default `:8080`), `-u/--upstream`, `-c/--cassette`,
+`--name`. `replay` and `auto` also take `--ignore-query` for the timestamps and
+nonces that change on every call.
 
 Matching is on method, path, query and body. Headers take no part: they differ
 per HTTP client, and the ones carrying secrets are redacted on both sides anyway.

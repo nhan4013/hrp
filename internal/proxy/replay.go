@@ -19,11 +19,16 @@ const statusNoMatch = 599
 // replayHeader tells the caller whether a response came from the cassette.
 const replayHeader = "X-Hrp-Replay"
 
-// replayer serves responses from a cassette and never reaches the network.
+// replayer serves responses from a cassette.
+//
+// With no fallback it never reaches the network: that is strict replay, and a
+// miss is an error. With a fallback (auto mode) a miss is forwarded upstream and
+// recorded, so the cassette fills in as you work.
 type replayer struct {
 	store    *cassette.Store
 	matcher  *matcher.Matcher
 	redactor *redact.Redactor
+	fallback http.Handler
 }
 
 func (rp *replayer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +38,14 @@ func (rp *replayer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !captured {
 		// Matching without the body would mean matching on less than was
-		// recorded, which could serve the wrong response. Refuse instead.
+		// recorded, which could serve the wrong response. Refuse instead —
+		// unless there is an upstream to ask, in which case just forward.
+		if rp.fallback != nil {
+			slog.Warn("auto: body over limit, forwarding without matching",
+				"method", r.Method, "path", r.URL.Path)
+			rp.fallback.ServeHTTP(w, r)
+			return
+		}
 		writeMiss(w, fmt.Sprintf("Request body exceeds the %d byte record limit, "+
 			"so it cannot be matched against the cassette.\n", maxBodySize))
 		slog.Warn("replay refused: body over limit",
@@ -54,6 +66,15 @@ func (rp *replayer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rp.store.MarkHit(hit.ID)
 		slog.Info("replay hit", "method", req.Method, "path", req.Path, "id", hit.ID)
 		writeRecorded(w, hit.Response)
+		return
+	}
+
+	if rp.fallback != nil {
+		// The body was buffered and put back above, so the recorder downstream
+		// reads it again from memory rather than from the wire.
+		slog.Info("auto: miss, forwarding upstream to record",
+			"method", req.Method, "path", req.Path, "best_score", res.Score)
+		rp.fallback.ServeHTTP(w, r)
 		return
 	}
 
