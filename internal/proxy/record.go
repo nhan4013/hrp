@@ -50,7 +50,10 @@ func (rec *recorder) captureRequest(r *http.Request) *pending {
 		return p
 	}
 
-	p.req = cassette.NewRequest(r, raw)
+	// Redact before building the cassette form, not after. NewRequest hashes the
+	// body, and a sha256 of a 16-digit card number is brute-forceable: the hash
+	// has to be of the redacted bytes. r.Body still holds the originals.
+	p.req = cassette.NewRequest(r, rec.redactor.Body(raw))
 	rec.redactor.Headers(p.req.Headers)
 	return p
 }
@@ -76,7 +79,7 @@ func (rec *recorder) modifyResponse(resp *http.Response) error {
 
 	// NewResponse copies the header map, so redacting it does not change what
 	// the client receives — only what lands on disk.
-	res := cassette.NewResponse(resp, raw, time.Since(p.start))
+	res := cassette.NewResponse(resp, rec.redactor.Body(raw), time.Since(p.start))
 	rec.redactor.Headers(res.Headers)
 
 	rec.store.Append(cassette.Interaction{

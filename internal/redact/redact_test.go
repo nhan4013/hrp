@@ -52,7 +52,7 @@ func TestHeaders(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			New(tt.extra...).Headers(tt.in)
+			mustRedactor(t, Rules{Headers: tt.extra}).Headers(tt.in)
 			if !reflect.DeepEqual(tt.in, tt.want) {
 				t.Errorf("got %v, want %v", tt.in, tt.want)
 			}
@@ -62,7 +62,7 @@ func TestHeaders(t *testing.T) {
 
 // Every default must actually be covered; a typo in the list is a silent leak.
 func TestAllDefaultHeadersAreRedacted(t *testing.T) {
-	r := New()
+	r := Default()
 	for _, name := range DefaultHeaders {
 		h := map[string][]string{name: {"secret"}}
 		r.Headers(h)

@@ -32,6 +32,7 @@ func Execute() error {
 		autoCmd(),
 		proxyCmd(),
 		inspectCmd(),
+		scanCmd(),
 	)
 	return root.Execute()
 }

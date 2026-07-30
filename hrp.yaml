@@ -1,0 +1,61 @@
+# Example hrp configuration. Pass it with --config hrp.yaml.
+#
+# Everything here is optional, and an explicit command-line flag always wins.
+# There is no `mode` key: the subcommand is the mode (record / replay / auto).
+
+listen: :8080
+upstream: https://sandbox.payment-vendor.com
+cassette: ./cassettes/payment.yaml
+
+match:
+  # Which parts of a request have to agree. Method and path carry most of the
+  # weight, so a near miss still shows a useful diff.
+  on: [method, path, query, body]
+  # Parameters that change on every call and must not decide a match.
+  ignore_query: [timestamp, nonce, _]
+
+redact:
+  # Added to the built-in list, which already covers authorization,
+  # proxy-authorization, cookie, set-cookie, x-api-key, api-key, x-auth-token
+  # and x-amz-security-token. Those need no configuration.
+  headers:
+    - x-vendor-signature
+
+  # Dotted paths into a JSON body. Arrays along the path are traversed
+  # element-wise, so `items.card.number` reaches every element of items.
+  # This is the only way to redact a secret stored as a JSON *number*.
+  json_fields:
+    - card.number
+    - card.cvv
+    - password
+    - id_number
+
+  # Applied to header values and to JSON string values. Keeping to strings is
+  # what stops a match on a bare number from producing invalid JSON.
+  #
+  # These same patterns become extra `hrp scan` detectors, so anything worth
+  # hiding is also reported when it slips through.
+  patterns:
+    - name: card_number
+      regex: '\b\d{13,19}\b'
+    # Shapes that cannot be told from ordinary data are not built into the
+    # scanner, because a scanner that cries wolf gets switched off. Declare the
+    # ones your own data actually contains:
+    - name: vn_id_number
+      regex: '\b\d{12}\b'
+
+fault:
+  # Off unless enabled. Use it to exercise retry and circuit-breaker paths
+  # without asking a vendor to break for you.
+  enabled: false
+  # Added to every request.
+  latency: 200ms
+  # Probability, 0 to 1, of answering with error_status instead of forwarding.
+  error_rate: 0.1
+  error_status: 503
+  # Probability of never answering at all, so the client hits its own timeout.
+  # This is the only way to exercise a client-side timeout path.
+  hang_rate: 0
+  # Fixes the random sequence, so a test that fails on the third retry fails on
+  # the third retry again. Defaults to 1; change it to shift the pattern.
+  seed: 1

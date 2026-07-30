@@ -54,8 +54,10 @@ func (rp *replayer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Normalize and redact exactly as recording does, so both sides of the
-	// comparison have been through the same transformation.
-	req := cassette.NewRequest(r, raw)
+	// comparison have been through the same transformation. Without this, body
+	// redaction would break matching: the recorded body holds the placeholder
+	// where the incoming one holds the real value.
+	req := cassette.NewRequest(r, rp.redactor.Body(raw))
 	rp.redactor.Headers(req.Headers)
 
 	candidates := rp.store.Interactions()
