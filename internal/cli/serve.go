@@ -169,7 +169,12 @@ func serve(cmd *cobra.Command, mode proxy.Mode, f serveFlags) error {
 	if err != nil {
 		return err
 	}
+	return runWithSignals(cmd, srv)
+}
 
+// runWithSignals serves until SIGINT or SIGTERM, then lets the server's own
+// graceful shutdown (and cassette flush) run.
+func runWithSignals(cmd *cobra.Command, srv *proxy.Server) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()

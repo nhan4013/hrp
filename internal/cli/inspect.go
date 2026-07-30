@@ -58,20 +58,43 @@ func writeInspectTable(out io.Writer, path string, store *cassette.Store, sortBy
 		return err
 	}
 
-	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ID\tMETHOD\tPATH\tQUERY\tSTATUS\tREQ\tRESP\tMS\tHITS")
+	// A forward-proxy cassette spans upstreams, so the host is part of each
+	// interaction's identity. A reverse-proxy cassette has one upstream for the
+	// whole file; repeating it on every row would be noise, hence no column.
+	showHost := false
 	for _, in := range interactions {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%d\t%d\n",
+		if in.Request.Host != "" {
+			showHost = true
+			break
+		}
+	}
+
+	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	if showHost {
+		_, _ = fmt.Fprintln(tw, "ID\tHOST\tMETHOD\tPATH\tQUERY\tSTATUS\tREQ\tRESP\tMS\tHITS")
+	} else {
+		_, _ = fmt.Fprintln(tw, "ID\tMETHOD\tPATH\tQUERY\tSTATUS\tREQ\tRESP\tMS\tHITS")
+	}
+	for _, in := range interactions {
+		cols := []string{
 			in.ID,
 			in.Request.Method,
 			in.Request.Path,
 			dash(url.Values(in.Request.Query).Encode()),
-			in.Response.Status,
+			strconv.Itoa(in.Response.Status),
 			bodySize(in.Request.Body, in.Request.BodyEncoding),
 			bodySize(in.Response.Body, in.Response.BodyEncoding),
-			in.Response.DurationMS,
-			in.Meta.HitCount,
-		)
+			strconv.FormatInt(in.Response.DurationMS, 10),
+			strconv.Itoa(in.Meta.HitCount),
+		}
+		if showHost {
+			host := dash(in.Request.Host)
+			if in.Request.Scheme != "" && in.Request.Host != "" {
+				host = in.Request.Scheme + "://" + in.Request.Host
+			}
+			cols = append(cols[:1], append([]string{host}, cols[1:]...)...)
+		}
+		_, _ = fmt.Fprintln(tw, strings.Join(cols, "\t"))
 	}
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("render table: %w", err)

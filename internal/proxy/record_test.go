@@ -167,7 +167,7 @@ func TestOversizedBodyIsForwardedButNotRecorded(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	size := maxBodySize + 1024
+	size := cassette.MaxBodySize + 1024
 	resp, err := front.Client().Post(front.URL+"/upload", "application/octet-stream",
 		io.LimitReader(zeros{}, int64(size)))
 	if err != nil {

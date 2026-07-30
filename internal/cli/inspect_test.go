@@ -64,6 +64,49 @@ func TestInspectTable(t *testing.T) {
 	}
 }
 
+// A forward-proxy cassette spans upstreams, so the table gains a HOST column.
+// A reverse-proxy cassette has one upstream for the whole file: no column.
+func TestInspectShowsHostWhenRecorded(t *testing.T) {
+	store := storeWith(t, cassette.Interaction{
+		ID: "aaa111",
+		Request: cassette.Request{
+			Scheme: "https",
+			Host:   "api.vendor.com",
+			Method: http.MethodGet,
+			Path:   "/v1/ping",
+		},
+		Response: cassette.Response{Status: 200},
+	})
+
+	var out strings.Builder
+	if err := writeInspectTable(&out, "c.yaml", store, "recorded"); err != nil {
+		t.Fatalf("writeInspectTable: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "HOST") {
+		t.Errorf("table should have a HOST column:\n%s", got)
+	}
+	if !strings.Contains(got, "https://api.vendor.com") {
+		t.Errorf("table should show scheme://host:\n%s", got)
+	}
+}
+
+func TestInspectOmitsHostWhenAbsent(t *testing.T) {
+	store := storeWith(t, cassette.Interaction{
+		ID:       "aaa111",
+		Request:  cassette.Request{Method: http.MethodGet, Path: "/v1/ping"},
+		Response: cassette.Response{Status: 200},
+	})
+
+	var out strings.Builder
+	if err := writeInspectTable(&out, "c.yaml", store, "recorded"); err != nil {
+		t.Fatalf("writeInspectTable: %v", err)
+	}
+	if got := out.String(); strings.Contains(got, "HOST") {
+		t.Errorf("reverse-proxy cassette should not grow a HOST column:\n%s", got)
+	}
+}
+
 func TestInspectEmptyCassette(t *testing.T) {
 	var out strings.Builder
 	if err := writeInspectTable(&out, "c.yaml", storeWith(t), "recorded"); err != nil {

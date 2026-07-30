@@ -46,8 +46,12 @@ type Rule interface {
 
 // DefaultRules is the rule set used when nothing is configured. Headers are
 // deliberately absent: they are noisy, differ per HTTP client, and the ones that
-// carry secrets are redacted on both sides anyway.
+// carry secrets are redacted on both sides anyway. Host is absent too: the
+// reverse proxy answers to a single upstream, so the MITM commands opt into it.
 var DefaultRules = []string{"method", "path", "query", "body"}
+
+// availableRules is every rule name New accepts, for error messages.
+var availableRules = []string{"method", "host", "path", "query", "body"}
 
 // Matcher is a set of rules that must all agree for a request to match.
 type Matcher struct {
@@ -73,7 +77,7 @@ func IgnoreQuery(keys ...string) Option {
 func New(names []string, opts ...Option) (*Matcher, error) {
 	if len(names) == 0 {
 		return nil, fmt.Errorf("matcher: no rules given, want some of %s",
-			strings.Join(DefaultRules, ", "))
+			strings.Join(availableRules, ", "))
 	}
 
 	var o options
@@ -87,6 +91,8 @@ func New(names []string, opts ...Option) (*Matcher, error) {
 		switch strings.ToLower(strings.TrimSpace(name)) {
 		case "method":
 			rule = methodRule{}
+		case "host":
+			rule = hostRule{}
 		case "path":
 			rule = pathRule{}
 		case "query":
@@ -95,7 +101,7 @@ func New(names []string, opts ...Option) (*Matcher, error) {
 			rule = bodyRule{}
 		default:
 			return nil, fmt.Errorf("matcher: unknown rule %q, want some of %s",
-				name, strings.Join(DefaultRules, ", "))
+				name, strings.Join(availableRules, ", "))
 		}
 		m.rules = append(m.rules, rule)
 		m.totalWeight += rule.Weight()

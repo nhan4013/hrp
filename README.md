@@ -36,8 +36,8 @@ Work in progress — this is a learning project, built in the open.
 - [x] Fault injection: latency, error rate, forced timeout
 - [x] Config file, `hrp.yaml`
 - [x] Golden-file tests and CI
+- [x] MITM forward proxy, so `HTTPS_PROXY=localhost:8080` is all you need
 - [ ] Release binaries and a Docker image
-- [ ] MITM forward proxy, so `HTTPS_PROXY=localhost:8080` is all you need
 
 > **Check a cassette before you commit it.** Sensitive headers are redacted with
 > no configuration, but which body field holds a card number is specific to your
@@ -154,6 +154,8 @@ not of its stored form, so a base64 body does not look a third larger than it is
 | `hrp replay -c FILE` | Serve from the cassette; never touch the network |
 | `hrp auto -u URL -c FILE` | Replay what is recorded, record what is not |
 | `hrp proxy -u URL` | Forward upstream, record nothing |
+| `hrp mitm <record\|replay\|auto\|proxy> -c FILE` | Same modes, as a forward proxy with TLS MITM: the app is unchanged, only `HTTPS_PROXY` points here |
+| `hrp ca install` | Create the development CA `mitm` uses, and show how to trust it |
 | `hrp inspect FILE` | List a cassette's interactions as a table |
 | `hrp scan FILE...` | Look for secrets a cassette should not carry; exits non-zero if found |
 
@@ -164,6 +166,36 @@ config file, which beats the default.
 
 Matching is on method, path, query and body. Headers take no part: they differ
 per HTTP client, and the ones carrying secrets are redacted on both sides anyway.
+
+## HTTPS without changing the app
+
+Everything above points the app at hrp instead of at the vendor. `hrp mitm`
+goes the other way: the app keeps its real base URL, and only the environment
+changes. Each CONNECT tunnel is terminated with a per-host certificate signed
+by a local development CA, so HTTPS traffic is recorded and replayed the same
+way plain HTTP is.
+
+```sh
+hrp ca install                                # once: create the CA, then trust it
+export REQUESTS_CA_BUNDLE=~/.hrp/ca.pem       # what your HTTP client trusts
+
+hrp mitm record -c ./cassettes/payment.yaml &
+HTTPS_PROXY=localhost:8080 ./myapp            # app unchanged
+```
+
+`mitm` takes the same subcommands — `record`, `replay`, `auto`, `proxy` — and
+the same flags, minus `--upstream`: every request names its own.
+
+A forward proxy fills one cassette from many vendors, so interactions recorded
+this way carry `scheme` and `host`, and matching compares them:
+`/v1/charges` on one vendor is not `/v1/charges` on another. Cassettes recorded
+through the reverse proxy carry no host and match exactly as before — an absent
+host is a wildcard.
+
+The CA key signs for *any* host. It is written with 0600 permissions under
+`~/.hrp/`, it exists for development, and it must stay out of git — `ca install`
+prints the per-tool and system-wide ways to trust the certificate and the
+warning that goes with them.
 
 ## Keeping secrets out of the cassette
 
