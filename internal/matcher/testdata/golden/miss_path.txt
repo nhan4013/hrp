@@ -1,0 +1,13 @@
+No recorded interaction matches GET /v1/refunds
+
+  Closest candidate: 8fa13f7c4e58 (GET /v1/charges), score 0.50
+  Differs on: path, query
+
+  [path]
+    - recorded: /v1/charges
+    + incoming: /v1/refunds
+
+  [query]
+    - recorded: limit=10
+    + incoming: limit=25
+      limit: recorded 10, incoming 25

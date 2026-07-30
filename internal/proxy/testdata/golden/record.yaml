@@ -1,0 +1,48 @@
+version: 1
+name: golden
+recorded_at: 0001-01-01T00:00:00Z
+upstream: http://upstream.test
+interactions:
+    - id: 57a41e2be70c
+      request:
+        method: POST
+        path: /v1/charges
+        query:
+            amount:
+                - "1500000"
+            currency:
+                - VND
+        headers:
+            authorization:
+                - <REDACTED>
+            content-type:
+                - application/json
+        body: '{"amount":1500000,"card":{"brand":"visa","number":"<REDACTED>"},"cvv":"<REDACTED>"}'
+        body_hash: sha256:564e4407a674226eb1a69cd0bc6b0d77ce0145d676e430509fa93009fb2711b3
+      response:
+        status: 201
+        headers:
+            content-type:
+                - application/json
+            set-cookie:
+                - <REDACTED>
+        body: '{"id":"ch_123","status":"succeeded"}'
+        duration_ms: 0
+      meta:
+        hit_count: 0
+        recorded_at: 0001-01-01T00:00:00Z
+    - id: 84f89c1abed7
+      request:
+        method: GET
+        path: /v1/blob
+      response:
+        status: 200
+        headers:
+            content-type:
+                - application/gzip
+        body: H4sIAP/+
+        body_encoding: base64
+        duration_ms: 0
+      meta:
+        hit_count: 0
+        recorded_at: 0001-01-01T00:00:00Z

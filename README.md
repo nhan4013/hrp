@@ -1,5 +1,7 @@
 # hrp — HTTP record & replay proxy
 
+[![CI](https://github.com/nhan4013/hrp/actions/workflows/ci.yml/badge.svg)](https://github.com/nhan4013/hrp/actions/workflows/ci.yml)
+
 A single-binary, language-agnostic HTTP proxy that records real traffic to a
 third-party API into a plain-YAML *cassette*, then replays it so your tests run
 without touching the network.
@@ -33,7 +35,7 @@ Work in progress — this is a learning project, built in the open.
 - [x] Body redaction (JSON field paths, regex) and `hrp scan`
 - [x] Fault injection: latency, error rate, forced timeout
 - [x] Config file, `hrp.yaml`
-- [ ] Golden-file tests and CI
+- [x] Golden-file tests and CI
 - [ ] Release binaries and a Docker image
 - [ ] MITM forward proxy, so `HTTPS_PROXY=localhost:8080` is all you need
 
@@ -244,10 +246,20 @@ exists to prevent.
 ## Development
 
 ```sh
-make test    # go test ./...
+make ci      # everything CI runs, in the same order
 make race    # go test -race ./...   <- the one that matters
 make lint    # golangci-lint run
+make golden  # regenerate golden files, then read the diff
+make scan     # hrp scan its own committed cassettes
 ```
+
+Two golden files guard output that unit tests would not notice drifting: the
+recorded cassette format, and the text of a replay miss report. Both regenerate
+with `-update` — read the resulting diff rather than committing it blind.
+
+CI also runs `hrp scan` over every cassette committed under `testdata/`. The
+tool's promise is that a committed cassette carries no secrets, so this
+repository is held to it too.
 
 Design notes, roadmap and the reasoning behind the tricky parts (single-read
 request bodies, cassette concurrency, determinism, explainable match failures)

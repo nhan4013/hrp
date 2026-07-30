@@ -1,0 +1,10 @@
+No recorded interaction matches POST /v1/charges
+
+  Closest candidate: 3992f97c9faf (POST /v1/charges), score 0.90
+  Differs on: body
+
+  [body]
+    - recorded: {"amount":1500000,"currency":"VND","card":{"last4":"1111"}}
+    + incoming: {"amount":2000000,"currency":"VND","card":{"last4":"4242"}}
+      amount: recorded 1500000, incoming 2000000
+      card.last4: recorded "1111", incoming "4242"
