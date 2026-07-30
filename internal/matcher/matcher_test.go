@@ -44,7 +44,7 @@ func TestNewAcceptsDefaultRules(t *testing.T) {
 	}
 }
 
-// Per a.md: JSON key order must not decide a match, but values must.
+// JSON key order must not decide a match, but values must.
 func TestBodyRule(t *testing.T) {
 	tests := []struct {
 		name      string

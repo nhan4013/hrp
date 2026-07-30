@@ -293,10 +293,6 @@ CI also runs `hrp scan` over every cassette committed under `testdata/`. The
 tool's promise is that a committed cassette carries no secrets, so this
 repository is held to it too.
 
-Design notes, roadmap and the reasoning behind the tricky parts (single-read
-request bodies, cassette concurrency, determinism, explainable match failures)
-live in [a.md](a.md).
-
 ## License
 
 [MIT](LICENSE)
