@@ -32,7 +32,7 @@ type replayer struct {
 }
 
 func (rp *replayer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	raw, replacement, captured := captureBody(r.Body, maxBodySize)
+	raw, replacement, captured := cassette.CaptureBody(r.Body, cassette.MaxBodySize)
 	if replacement != nil {
 		r.Body = replacement
 	}
@@ -47,7 +47,7 @@ func (rp *replayer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeMiss(w, fmt.Sprintf("Request body exceeds the %d byte record limit, "+
-			"so it cannot be matched against the cassette.\n", maxBodySize))
+			"so it cannot be matched against the cassette.\n", cassette.MaxBodySize))
 		slog.Warn("replay refused: body over limit",
 			"method", r.Method, "path", r.URL.Path)
 		return

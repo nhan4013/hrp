@@ -11,10 +11,11 @@ import (
 	"github.com/nhan4013/hrp/internal/cassette"
 )
 
-// Rule weights. Method and path together outweigh everything else, so ranking
-// candidates by score surfaces one that addresses the same endpoint.
+// Rule weights. Method, host and path together outweigh everything else, so
+// ranking candidates by score surfaces one that addresses the same endpoint.
 const (
 	weightMethod = 4
+	weightHost   = 4
 	weightPath   = 4
 	weightQuery  = 1
 	weightBody   = 1
@@ -29,6 +30,33 @@ func (methodRule) Compare(recorded, incoming *cassette.Request) *Mismatch {
 		return nil
 	}
 	return &Mismatch{Rule: "method", Recorded: recorded.Method, Incoming: incoming.Method}
+}
+
+type hostRule struct{}
+
+func (hostRule) Name() string    { return "host" }
+func (hostRule) Weight() float64 { return weightHost }
+
+// Compare treats an absent scheme or host on either side as a wildcard:
+// cassettes recorded through the reverse proxy carry no host at all, and they
+// must still match the calls they recorded.
+func (hostRule) Compare(recorded, incoming *cassette.Request) *Mismatch {
+	if recorded.Host == "" || incoming.Host == "" {
+		return nil
+	}
+	schemeAgree := recorded.Scheme == "" || incoming.Scheme == "" ||
+		recorded.Scheme == incoming.Scheme
+	if schemeAgree && strings.EqualFold(recorded.Host, incoming.Host) {
+		return nil
+	}
+	return &Mismatch{Rule: "host", Recorded: authority(recorded), Incoming: authority(incoming)}
+}
+
+func authority(r *cassette.Request) string {
+	if r.Scheme == "" {
+		return r.Host
+	}
+	return r.Scheme + "://" + r.Host
 }
 
 type pathRule struct{}

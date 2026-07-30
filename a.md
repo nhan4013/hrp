@@ -180,6 +180,8 @@ interactions:
   - id: 01J8K...            # ULID, dùng để replay/inspect từng cái
     request:
       method: POST
+      scheme: https           # chỉ có khi ghi qua MITM forward proxy (omitempty)
+      host: api.vendor.com    # chỉ có khi ghi qua MITM forward proxy (omitempty)
       path: /v1/charges
       query:
         currency: [VND]
@@ -429,11 +431,11 @@ Response có `Date`, `X-Request-Id`, timestamp trong body → mỗi lần record
 
 ### Phase 5 — MITM forward proxy (1–1.5 tuần) *(optional nhưng đáng)*
 
-- [ ] Xử lý `CONNECT` method
-- [ ] Sinh CA cert bằng `crypto/x509`
-- [ ] Sinh leaf cert on-the-fly theo SNI, cache lại
-- [ ] `hrp ca install` — hướng dẫn trust CA trên máy dev
-- [ ] Hoạt động với `HTTPS_PROXY=localhost:8080`
+- [x] Xử lý `CONNECT` method
+- [x] Sinh CA cert bằng `crypto/x509`
+- [x] Sinh leaf cert on-the-fly theo SNI, cache lại
+- [x] `hrp ca install` — hướng dẫn trust CA trên máy dev
+- [x] Hoạt động với `HTTPS_PROXY=localhost:8080`
 
 **Deliverable:** không cần đổi base URL trong app nữa, chỉ set env var.
 

@@ -22,8 +22,21 @@ func buildRedactor(c *config.Config) (*redact.Redactor, error) {
 	})
 }
 
+// mitmDefaultRules add host to the reverse proxy's default set: a forward
+// proxy serves many upstreams into one cassette, and the same path on two of
+// them is two different calls.
+var mitmDefaultRules = []string{"method", "host", "path", "query", "body"}
+
 func buildMatcher(c *config.Config, extraIgnoreQuery []string) (*matcher.Matcher, error) {
-	rules := matcher.DefaultRules
+	return buildMatcherWith(matcher.DefaultRules, c, extraIgnoreQuery)
+}
+
+func buildMITMMatcher(c *config.Config, extraIgnoreQuery []string) (*matcher.Matcher, error) {
+	return buildMatcherWith(mitmDefaultRules, c, extraIgnoreQuery)
+}
+
+func buildMatcherWith(defaultRules []string, c *config.Config, extraIgnoreQuery []string) (*matcher.Matcher, error) {
+	rules := defaultRules
 	var ignoreQuery []string
 	if c != nil {
 		if len(c.Match.On) > 0 {

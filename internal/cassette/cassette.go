@@ -48,10 +48,13 @@ var volatileHeaders = map[string]struct{}{
 	"keep-alive":          {},
 	"proxy-authenticate":  {},
 	"proxy-authorization": {},
-	"te":                  {},
-	"trailer":             {},
-	"transfer-encoding":   {},
-	"upgrade":             {},
+	// Not in RFC 7230 but just as hop-by-hop: curl sends it through every
+	// forward proxy, and it says nothing about the request itself.
+	"proxy-connection":  {},
+	"te":                {},
+	"trailer":           {},
+	"transfer-encoding": {},
+	"upgrade":           {},
 	// client-specific
 	"accept-encoding": {},
 	"content-length":  {},
@@ -73,7 +76,13 @@ type Interaction struct {
 }
 
 type Request struct {
-	Method       string              `yaml:"method"`
+	Method string `yaml:"method"`
+	// Scheme and Host are set only for requests recorded through the MITM
+	// forward proxy, which serves many upstreams in one cassette. The reverse
+	// proxy has a single configured upstream, so both stay empty there and
+	// reverse-proxy cassettes keep their exact old shape.
+	Scheme       string              `yaml:"scheme,omitempty"`
+	Host         string              `yaml:"host,omitempty"`
 	Path         string              `yaml:"path"`
 	Query        map[string][]string `yaml:"query,omitempty"`
 	Headers      map[string][]string `yaml:"headers,omitempty"`
@@ -106,6 +115,12 @@ func NewRequest(r *http.Request, body []byte) Request {
 		Headers:  normalizeHeaders(r.Header),
 		BodyHash: HashBody(body),
 	}
+	// A forward-proxy request carries an absolute URL; a reverse-proxy request
+	// does not (its host lives in the configured upstream, not in each request).
+	if r.URL.Host != "" {
+		req.Scheme = r.URL.Scheme
+		req.Host = strings.ToLower(r.URL.Host)
+	}
 	req.Body, req.BodyEncoding = encodeBody(body)
 	return req
 }
@@ -126,6 +141,11 @@ func NewResponse(resp *http.Response, body []byte, took time.Duration) Response 
 // Headers are excluded on purpose: they carry redacted and volatile values.
 func ID(req Request) string {
 	h := sha256.New()
+	// Host identity is mixed in only when present, so an interaction recorded
+	// through the reverse proxy keeps the ID it has always had.
+	if req.Host != "" {
+		_, _ = fmt.Fprintf(h, "%s\n%s\n", req.Scheme, req.Host)
+	}
 	_, _ = fmt.Fprintf(h, "%s\n%s\n%s\n%s",
 		req.Method, req.Path, url.Values(req.Query).Encode(), req.BodyHash)
 	return hex.EncodeToString(h.Sum(nil))[:12]

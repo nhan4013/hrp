@@ -12,8 +12,9 @@ import (
 // main owns the process exit code.
 func Execute() error {
 	root := &cobra.Command{
-		Use:   "hrp",
-		Short: "HTTP record & replay proxy",
+		Use:     "hrp",
+		Version: version,
+		Short:   "HTTP record & replay proxy",
 		Long: "hrp sits between your app and a third-party API. It records real\n" +
 			"traffic into a plain-YAML cassette, then replays it so tests run\n" +
 			"without touching the network.",
@@ -33,6 +34,8 @@ func Execute() error {
 		proxyCmd(),
 		inspectCmd(),
 		scanCmd(),
+		mitmCmd(),
+		caCmd(),
 	)
 	return root.Execute()
 }

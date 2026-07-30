@@ -15,6 +15,7 @@ import (
 	"github.com/nhan4013/hrp/internal/cassette"
 	"github.com/nhan4013/hrp/internal/fault"
 	"github.com/nhan4013/hrp/internal/matcher"
+	"github.com/nhan4013/hrp/internal/mitm"
 	"github.com/nhan4013/hrp/internal/redact"
 )
 
@@ -44,7 +45,7 @@ type Config struct {
 	// Listen is the address to bind, e.g. ":8080".
 	Listen string
 	// Upstream is the absolute base URL to forward to. Required for every mode
-	// except ModeReplay, which never leaves the machine.
+	// except ModeReplay, which never leaves the machine. Unused when CA is set.
 	Upstream string
 	// Mode defaults to ModePassthrough.
 	Mode Mode
@@ -57,14 +58,23 @@ type Config struct {
 	Redactor *redact.Redactor
 	// Fault injects failures when non-nil and active.
 	Fault *fault.Injector
+	// CA turns the server into a MITM forward proxy: CONNECT tunnels are
+	// terminated with certificates minted from this CA, and each request's own
+	// absolute URL is its upstream. nil keeps the single-upstream reverse proxy.
+	CA *mitm.CA
+	// Transport carries requests to real upstreams; nil means
+	// http.DefaultTransport. Tests use it to trust a test-only CA.
+	Transport http.RoundTripper
 }
 
 // Server is an HTTP proxy that records or replays interactions with an upstream.
 type Server struct {
-	mode     Mode
-	upstream *url.URL
-	store    *cassette.Store
-	http     *http.Server
+	mode      Mode
+	upstream  *url.URL
+	store     *cassette.Store
+	ca        *mitm.CA
+	transport http.RoundTripper
+	http      *http.Server
 }
 
 // New builds a Server from cfg, rejecting any combination that cannot work.
@@ -76,9 +86,40 @@ func New(cfg Config) (*Server, error) {
 		cfg.Redactor = redact.Default()
 	}
 
-	s := &Server{mode: cfg.Mode, store: cfg.Store}
+	s := &Server{mode: cfg.Mode, store: cfg.Store, ca: cfg.CA, transport: cfg.Transport}
 
 	var handler http.Handler
+	var err error
+	if cfg.CA != nil {
+		handler, err = s.mitmEngine(cfg)
+	} else {
+		handler, err = s.reverseEngine(cfg)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Faults wrap the per-request engine, not the MITM handler: an injected
+	// error must look like the vendor failing, not like the tunnel failing.
+	if cfg.Fault != nil && cfg.Fault.Active() {
+		handler = cfg.Fault.Middleware(handler)
+	}
+
+	if cfg.CA != nil {
+		handler = &mitmHandler{ca: cfg.CA, engine: handler}
+	}
+
+	s.http = &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           logRequests(handler),
+		ReadHeaderTimeout: readHeaderTimeout,
+		// No Read/WriteTimeout: proxied bodies may stream for a long time.
+	}
+	return s, nil
+}
+
+// reverseEngine assembles the mode's handler behind a single fixed upstream.
+func (s *Server) reverseEngine(cfg Config) (http.Handler, error) {
 	switch cfg.Mode {
 	case ModeReplay:
 		if cfg.Store == nil {
@@ -87,11 +128,11 @@ func New(cfg Config) (*Server, error) {
 		if cfg.Matcher == nil {
 			return nil, errors.New("replay mode needs a matcher")
 		}
-		handler = &replayer{
+		return &replayer{
 			store:    cfg.Store,
 			matcher:  cfg.Matcher,
 			redactor: cfg.Redactor,
-		}
+		}, nil
 
 	case ModeAuto:
 		if cfg.Store == nil {
@@ -106,12 +147,12 @@ func New(cfg Config) (*Server, error) {
 		}
 		s.upstream = target
 		rec := &recorder{store: cfg.Store, redactor: cfg.Redactor}
-		handler = &replayer{
+		return &replayer{
 			store:    cfg.Store,
 			matcher:  cfg.Matcher,
 			redactor: cfg.Redactor,
 			fallback: s.reverseProxy(target, rec),
-		}
+		}, nil
 
 	case ModeRecord, ModePassthrough:
 		target, err := parseUpstream(cfg.Upstream)
@@ -127,24 +168,60 @@ func New(cfg Config) (*Server, error) {
 			}
 			rec = &recorder{store: cfg.Store, redactor: cfg.Redactor}
 		}
-		handler = s.reverseProxy(target, rec)
+		return s.reverseProxy(target, rec), nil
 
 	default:
 		return nil, fmt.Errorf("unknown mode %q, want one of %s, %s, %s, %s",
 			cfg.Mode, ModePassthrough, ModeRecord, ModeReplay, ModeAuto)
 	}
+}
 
-	if cfg.Fault != nil && cfg.Fault.Active() {
-		handler = cfg.Fault.Middleware(handler)
-	}
+// mitmEngine assembles the same modes, except every request carries its own
+// upstream in its absolute URL, so no Upstream is configured or required.
+func (s *Server) mitmEngine(cfg Config) (http.Handler, error) {
+	switch cfg.Mode {
+	case ModeReplay:
+		if cfg.Store == nil {
+			return nil, errors.New("replay mode needs a cassette")
+		}
+		if cfg.Matcher == nil {
+			return nil, errors.New("replay mode needs a matcher")
+		}
+		return &replayer{
+			store:    cfg.Store,
+			matcher:  cfg.Matcher,
+			redactor: cfg.Redactor,
+		}, nil
 
-	s.http = &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           logRequests(handler),
-		ReadHeaderTimeout: readHeaderTimeout,
-		// No Read/WriteTimeout: proxied bodies may stream for a long time.
+	case ModeAuto:
+		if cfg.Store == nil {
+			return nil, errors.New("auto mode needs a cassette")
+		}
+		if cfg.Matcher == nil {
+			return nil, errors.New("auto mode needs a matcher")
+		}
+		rec := &recorder{store: cfg.Store, redactor: cfg.Redactor}
+		return &replayer{
+			store:    cfg.Store,
+			matcher:  cfg.Matcher,
+			redactor: cfg.Redactor,
+			fallback: s.forwardProxy(rec),
+		}, nil
+
+	case ModeRecord, ModePassthrough:
+		var rec *recorder
+		if cfg.Mode == ModeRecord {
+			if cfg.Store == nil {
+				return nil, errors.New("record mode needs a cassette")
+			}
+			rec = &recorder{store: cfg.Store, redactor: cfg.Redactor}
+		}
+		return s.forwardProxy(rec), nil
+
+	default:
+		return nil, fmt.Errorf("unknown mode %q, want one of %s, %s, %s, %s",
+			cfg.Mode, ModePassthrough, ModeRecord, ModeReplay, ModeAuto)
 	}
-	return s, nil
 }
 
 func parseUpstream(upstream string) (*url.URL, error) {
@@ -170,6 +247,8 @@ func (s *Server) reverseProxy(target *url.URL, rec *recorder) http.Handler {
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
 		},
+		// nil means http.DefaultTransport; tests inject a CA-trusting one.
+		Transport: s.transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.Error("upstream request failed",
 				"method", r.Method, "path", r.URL.Path, "err", err)
@@ -191,9 +270,13 @@ func (s *Server) reverseProxy(target *url.URL, rec *recorder) http.Handler {
 func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
-		// Replay never forwards, so there is no upstream to report.
+		// Replay never forwards, so there is no upstream to report. MITM has no
+		// single upstream either: each request names its own.
 		upstream := "none (replay)"
-		if s.upstream != nil {
+		switch {
+		case s.ca != nil:
+			upstream = "per request (forward proxy)"
+		case s.upstream != nil:
 			upstream = s.upstream.String()
 		}
 		slog.Info("listening", "addr", s.http.Addr, "mode", string(s.mode), "upstream", upstream)
