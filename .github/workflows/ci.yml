@@ -1,0 +1,74 @@
+name: CI
+
+# No step interpolates anything from the event payload, so there is no path for
+# a crafted branch name, commit message or PR title to reach a run: command.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          # Read the version from go.mod so there is one place to bump it.
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        # gofmt exits 0 even when it has complaints, so check for output instead.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      # -race is the point of running tests in CI at all: the cassette store is
+      # shared across concurrent requests, and a data race there is the kind of
+      # bug that never shows up on one developer's machine.
+      - name: test with race detector
+        run: go test -race -count=1 ./...
+
+      - name: hrp scan its own committed cassettes
+        # The tool's promise is that a committed cassette carries no secrets.
+        # Holding this repository to that promise is worth more than a unit test.
+        shell: bash
+        run: |
+          go build -o bin/hrp ./cmd/hrp
+          mapfile -t cassettes < <(find . -path '*/testdata/*' -name '*.yaml')
+          if [ ${#cassettes[@]} -eq 0 ]; then
+            echo "no committed cassettes to scan"
+            exit 0
+          fi
+          ./bin/hrp scan --config hrp.yaml "${cassettes[@]}"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          # Pinned rather than "latest": a new release that adds a check should
+          # break on a deliberate bump, not on an unrelated pull request.
+          version: v2.12.2

@@ -1,0 +1,4 @@
+No recorded interaction matches GET /v1/charges
+
+  The cassette holds no interactions to match against.
+  Record this traffic first, then replay it.
