@@ -299,4 +299,4 @@ live in [a.md](a.md).
 
 ## License
 
-Not yet chosen — all rights reserved for now.
+[MIT](LICENSE)
